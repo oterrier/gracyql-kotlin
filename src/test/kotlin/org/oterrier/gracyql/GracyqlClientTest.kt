@@ -81,9 +81,9 @@ class GracyqlClientTest {
         var total = 0
         val miniTimeElapsed = measureTimeMillis {
             total = 0
-            cli.batchPing(docs, batchSize = batchSize, next=batchSlice).forEach {
+            cli.batchPing(docs, batchSize = batchSize, next=batchSlice).forEach { doc ->
                 total++
-                it?.let {
+                doc?.let {
                     assertTrue(it.text?.startsWith("Hello world"))
                 }
             }
@@ -92,12 +92,12 @@ class GracyqlClientTest {
         println("$miniTimeElapsed")
         val maxiTimeElapsed = measureTimeMillis {
             total = 0
-            cli.batchTag(docs, batchSize = batchSize, next = batchSlice).forEach {
+            cli.batchTag(docs, batchSize = batchSize, next = batchSlice).forEach { doc ->
                 total++
-                it?.let {
+                doc?.let {
                     assertTrue(it.text?.startsWith("Hello world"))
                     assertEquals(it.tokens?.get(0)?.lemma, "hello")
-                    assertEquals(it.tokens?.get(0)?.tag, "ADV")
+                    assertEquals(it.tokens?.get(0)?.pos, "INTJ")
                 }
             }
         }
