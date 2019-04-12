@@ -68,20 +68,40 @@ class GracyqlClientTest {
 
     @Test
     fun tag_2docs() {
-        val v = cli.tag(listOf("Test1", "Test2"), batch = 10)
-        assertEquals(v?.size, 2)
+        val batch = cli.batchPing(listOf("Test1", "Test2")).toList()
+        assertEquals(batch.size, 2)
     }
     @Test
     fun bulk_tag() {
 
-        val docs = (0..10_000).map { "Hello world $it !" }
+        val batchSize = 1_000
+        val batchSlice = 100
+        val docs = (0 until 10_000).map { "Hello world $it !" }
+
+        var total = 0
         val miniTimeElapsed = measureTimeMillis {
-            val v = cli.ping(docs, batch = 1000)
+            total = 0
+            cli.batchPing(docs, batchSize = batchSize, next=batchSlice).forEach {
+                total++
+                it?.let {
+                    assertTrue(it.text?.startsWith("Hello world"))
+                }
+            }
         }
+        assertEquals(total, docs.size)
         println("$miniTimeElapsed")
         val maxiTimeElapsed = measureTimeMillis {
-            val v = cli.tag(docs, batch = 1000)
+            total = 0
+            cli.batchTag(docs, batchSize = batchSize, next = batchSlice).forEach {
+                total++
+                it?.let {
+                    assertTrue(it.text?.startsWith("Hello world"))
+                    assertEquals(it.tokens?.get(0)?.lemma, "hello")
+                    assertEquals(it.tokens?.get(0)?.tag, "ADV")
+                }
+            }
         }
+        assertEquals(total, docs.size)
         println("$maxiTimeElapsed")
         assertTrue(maxiTimeElapsed > miniTimeElapsed)
     }

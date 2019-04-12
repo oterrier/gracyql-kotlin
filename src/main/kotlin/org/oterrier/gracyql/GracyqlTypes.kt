@@ -7,7 +7,7 @@ data class SpacyData(
 data class SpacyNlp(
         val meta: ModelMeta? = null,
         val doc: SpacyDoc? = null,
-        val docs: List<SpacyDoc?>? = null
+        val batch : Batch? = null
 )
 
 data class ModelMeta(
@@ -20,6 +20,11 @@ data class ModelMeta(
         val sources: List<String>? = null,
         val spacy_version: String? = null,
         val version: String? = null
+)
+
+data class Batch(
+    val batch_id : String?= null,
+    val docs: List<SpacyDoc?>? = null
 )
 
 data class SpacyDoc(

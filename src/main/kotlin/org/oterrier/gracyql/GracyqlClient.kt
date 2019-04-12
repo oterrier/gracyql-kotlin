@@ -1,10 +1,12 @@
 package org.oterrier.gracyql
 
 
+import com.github.kittinunf.fuel.core.FuelError
 import com.github.kittinunf.fuel.core.FuelManager
 import com.github.kittinunf.fuel.core.Headers
 import com.github.kittinunf.fuel.gson.gsonDeserializerOf
 import com.github.kittinunf.fuel.httpPost
+import com.github.kittinunf.result.Result
 import com.google.gson.Gson
 
 
@@ -43,7 +45,30 @@ class GracyqlClient(
     fun close() {
     }
 
-    fun queryOne(query: String): SpacyDoc? {
+    fun query(docClause : String,
+              document: String,
+              model: String = "en",
+              disable : List<String>? = null): Result<GracyqlResponse, FuelError> {
+        var nlpClause = mutableListOf<String>().let {
+            if (model != null) it.add("model: ${gson.toJson(model)}")
+            if (disable != null) it.add("disable: ${gson.toJson(disable)}")
+            it.joinToString(",", prefix = "nlp(", postfix = ")")
+        }
+        var batchClause = mutableListOf<String>().let {
+            if (document != null) it.add("text: ${gson.toJson(document)}")
+            it.joinToString(",", prefix = "doc(", postfix = ")")
+        }
+
+
+        val query = """
+            query {
+              $nlpClause {
+                $batchClause {
+                    $docClause
+                }
+              }
+            }
+        """.trimIndent()
         val (_, _, result) = url
             .httpPost()
             .timeout(15000)
@@ -52,10 +77,68 @@ class GracyqlClient(
             .header(Headers.CONTENT_TYPE, "application/graphql")
             .body(query)
             .responseObject(gsonDeserializerOf(GracyqlResponse::class.java))
-        return result.get()?.data?.nlp?.doc
+        return result
     }
 
-    fun queryMany(query: String): List<SpacyDoc?>? {
+    inner class BatchQuery(val docsClause : String,
+                     val documents: List<String>? = null,
+                     val batchSize: Int? = null,
+                     val next: Int? = null,
+                     val model: String = "en",
+                     val disable : List<String>? = null
+    ) {
+        fun seedF(): Batch? {
+            batchQuery(docsClause, documents, batchSize = batchSize, next=next).fold(
+                { data -> return data?.data?.nlp?.batch },
+                { error -> println("An error of type ${error.exception} happened: ${error.message}"); return null }
+            )
+        }
+        fun nextF(b : Batch?): Batch? {
+            val batchId = b?.batch_id
+            batchQuery(docsClause, batchId = batchId, next=next).fold(
+                { data -> return data?.data?.nlp?.batch },
+                { error -> println("An error of type ${error.exception} happened: ${error.message}"); return null }
+            )
+        }
+        fun toSequence() : Sequence<SpacyDoc?> = generateSequence(seedFunction=::seedF, nextFunction=::nextF).flatMap { it.docs!!.asSequence() }
+    }
+
+
+    fun batchQuery(docsClause : String,
+                   documents: List<String>? = null,
+                   batchId: String? = null,
+                   batchSize: Int? = null,
+                   next: Int? = null,
+                   model: String = "en",
+                   disable : List<String>? = null
+    ): Result<GracyqlResponse, FuelError> {
+        var nlpClause = mutableListOf<String>().let {
+            if (model != null) it.add("model: ${gson.toJson(model)}")
+            if (disable != null) it.add("disable: ${gson.toJson(disable)}")
+            it.joinToString(",", prefix = "nlp(", postfix = ")")
+        }
+        var batchClause = mutableListOf<String>().let {
+            if (documents != null) it.add("texts: ${gson.toJson(documents)}")
+            if (batchId != null) it.add("batch_id: ${gson.toJson(batchId)}")
+            if (batchSize != null) it.add("batch_size: $batchSize")
+            if (next != null) it.add("next: $next")
+            it.joinToString(",", prefix = "batch(", postfix = ")")
+        }
+
+
+        val query = """
+            query {
+              $nlpClause {
+                $batchClause {
+                    batch_id
+                    docs {
+                        $docsClause
+                    }
+                }
+              }
+            }
+        """.trimIndent()
+
         val (_, _, result) = url
             .httpPost()
             .timeout(15000)
@@ -64,151 +147,129 @@ class GracyqlClient(
             .header(Headers.CONTENT_TYPE, "application/graphql")
             .body(query)
             .responseObject(gsonDeserializerOf(GracyqlResponse::class.java))
-        return result.get()?.data?.nlp?.docs
+        return result
     }
 
-    fun tag(document: String, model: String = "en"): SpacyDoc? {
-        val query = """
-            fragment PosTagger on Token {
-              id
-              start
-              end
-              pos
-              lemma
-            }
-
-            query PosTagger {
-              nlp(model: "$model") {
-                doc(text: ${gson.toJson(document)}) {
-                  text
-                  tokens {
-                    ...PosTagger
-                  }
-                }
-              }
-            }
-            """.trimIndent()
-        return queryOne(query)
-    }
-
-    fun tag(documents: List<String>, batch: Int = 100, model: String = "en"): List<SpacyDoc?>? {
-        val query = """
-            fragment PosTagger on Token {
-              id
-              start
-              end
-              pos
-              lemma
-            }
-
-            query PosTagger {
-              nlp(model: "$model") {
-                docs(texts: ${gson.toJson(documents)}, batch_size : $batch) {
-                  text
-                  tokens {
-                    ...PosTagger
-                  }
-                }
-              }
-            }
-            """.trimIndent()
-        return queryMany(query)
-
-    }
-
-    fun tagWithSentences(document: String, model: String = "en"): SpacyDoc? {
-        val query = """
-            fragment PosTagger on Token {
-              id
-              start
-              end
-              pos
-              lemma
-            }
-
-            query POSTaggerWithSentences {
-              nlp(model: "$model") {
-                doc(text: ${gson.toJson(document)}) {
-                  text
-                  sents {
-                      start
-                      end
+    fun tag(document: String, model: String = "en", disable : List<String>? = null): SpacyDoc? {
+        val docClause = """
+                      text
                       tokens {
-                        ...PosTagger
+                          id
+                          start
+                          end
+                          pos
+                          lemma
                       }
-                  }
-                }
-              }
-            }
-            """.trimIndent()
-        return queryOne(query)
+        """.trimIndent()
+        query(docClause, document, model, disable).fold(
+            { data -> return data?.data?.nlp?.doc },
+            { error -> println("An error of type ${error.exception} happened: ${error.message}"); return null }
+        )
     }
 
-    fun ner(document: String, model: String = "en"): SpacyDoc? {
-        val query = """
-            query NER {
-              nlp(model: "$model") {
-                doc(text: ${gson.toJson(document)}) {
-                  text
-                  ents {
-                    start
-                    end
-                    label
-                  }
-                }
-              }
-            }
-            """.trimIndent()
-        return queryOne(query)
+    fun batchTag(
+        documents: List<String>? = null,
+        batchId: String? = null,
+        batchSize: Int? = null,
+        next: Int? = null,
+        model: String = "en",
+        disable : List<String>? = null
+    ): Sequence<SpacyDoc?> {
+
+        val docsClause = """
+                      text
+                      tokens {
+                          id
+                          start
+                          end
+                          pos
+                          lemma
+                      }
+        """.trimIndent()
+        val bq = BatchQuery(docsClause, documents, batchSize, next, model, disable)
+        return bq.toSequence()
     }
 
-    fun nerWithSentences(document: String, model: String = "en"): SpacyDoc? {
-        val query = """
-            query NERWithSentences {
-              nlp(model: "$model") {
-                doc(text: ${gson.toJson(document)}) {
-                  text
-                  sents {
-                      start
-                      end
+    fun tagWithSentences(document: String, model: String = "en", disable : List<String>? = null): SpacyDoc? {
+        val docClause = """
+                      text
+                      sents {
+                          start
+                          end
+                          tokens {
+                              id
+                              start
+                              end
+                              pos
+                              lemma
+                          }
+                      }
+        """.trimIndent()
+        query(docClause, document, model, disable).fold(
+            { data -> return data?.data?.nlp?.doc },
+            { error -> println("An error of type ${error.exception} happened: ${error.message}"); return null }
+        )
+    }
+
+    fun ner(document: String, model: String = "en", disable : List<String>? = null): SpacyDoc? {
+        val docClause = """
+                      text
                       ents {
-                        start
-                        end
-                        text
-                        label
+                          start
+                          end
+                          text
+                          label
                       }
-                  }
-                }
-              }
-            }
-            """.trimIndent()
-        return queryOne(query)
+        """.trimIndent()
+        query(docClause, document, model, disable).fold(
+            { data -> return data?.data?.nlp?.doc },
+            { error -> println("An error of type ${error.exception} happened: ${error.message}"); return null }
+        )
     }
 
-    fun ping(document: String, model: String = "en"): SpacyDoc? {
-        val query = """
-            {
-              nlp(model: "$model") {
-                doc(text: ${gson.toJson(document)}) {
-                  text
-                }
-              }
-            }
-            """.trimIndent()
-        return queryOne(query)
+    fun nerWithSentences(document: String, model: String = "en", disable : List<String>? = null): SpacyDoc? {
+        val docClause = """
+                      text
+                      sents {
+                          start
+                          end
+                          ents {
+                              start
+                              end
+                              text
+                              label
+                          }
+                      }
+        """.trimIndent()
+        query(docClause, document, model, disable).fold(
+            { data -> return data?.data?.nlp?.doc },
+            { error -> println("An error of type ${error.exception} happened: ${error.message}"); return null }
+        )
     }
 
-    fun ping(documents: List<String>, batch: Int = 100, model: String = "en"): List<SpacyDoc?>? {
-        val query = """
-            {
-              nlp(model: "$model") {
-                docs(texts: ${gson.toJson(documents)}, batch_size : $batch) {
-                  text
-                }
-              }
-            }
-            """.trimIndent()
-        return queryMany(query)
-
+    fun ping(document: String, model: String = "en", disable : List<String>? = null): SpacyDoc? {
+        val docClause = """
+                      text
+        """.trimIndent()
+        query(docClause, document, model, disable).fold(
+            { data -> return data?.data?.nlp?.doc },
+            { error -> println("An error of type ${error.exception} happened: ${error.message}"); return null }
+        )
     }
+    fun batchPing(
+        documents: List<String>? = null,
+        batchId: String? = null,
+        batchSize: Int? = null,
+        next: Int? = null,
+        model: String = "en",
+        disable : List<String>? = null
+    ): Sequence<SpacyDoc?> {
+
+        val docsClause = """
+                      text
+        """.trimIndent()
+        val bq = BatchQuery(docsClause, documents, batchSize, next, model, disable)
+        return bq.toSequence()
+    }
+
 }
